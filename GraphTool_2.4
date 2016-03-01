@@ -1,0 +1,1089 @@
+#!/usr/bin/perl
+
+use GD::Graph::linespoints;
+use GD::Graph::bars;
+use GD::Graph::mixed;
+use GD::Graph::colour;
+use Term::ANSIColor;
+
+#===============================================#
+#       GraphTool Version History               #
+#===============================================#
+# Author	: Sajith Premadasa              #
+# Version 2.3 	: 10th May 2008			#
+# Version 2.4 	: 10th Jun 2009			#
+#===============================================#
+
+#-----------------------------------------------#
+#	Get environment variable for home	#
+#-----------------------------------------------#
+$zHome = $ENV{'HOME'};
+$zScriptPath = "$zHome/scripts";
+
+require "$zScriptPath/GenGraph.pl";
+GD::Graph::colour::read_rgb("$zScriptPath/rgb.txt") or
+die "Cannot read colours from rgb.txt";
+@colour_names1 = GD::Graph::colour::colour_list();
+@colour_names = sort @colour_names1;
+
+#-----------------------------------------------#
+#		Input Variables			#
+#-----------------------------------------------#
+$zLogName="";
+$zLogPattern="";
+$zX="";
+$iY=0;
+$iX=1;
+%aY= ();
+
+#-----------------------------------------------#
+#		Variables for Script		#
+#-----------------------------------------------#
+$bGraph=0;
+$bScript=0;
+$bCSV=0;
+$bFilterByTime=0;
+$iXToken=0;
+$iYToken=0;
+$iNoOfTokens=0;
+$iTB = "000000";
+$iTE = "235959";
+$bTimeOK=1;
+$bNthSample=0;
+$iSampleCount=0;
+$iNthSample=1;
+#-----------------------------------------------#
+#		Graph Details			#
+#-----------------------------------------------#
+$zGraphTitle="";
+$zGraphXTitle="Time";
+$zGraphYTitle="Value";
+$zGraphTitle="Example Graph";
+$zGraphType="lines";
+$zLegends="";
+$iLegends=1;
+
+#-----------------------------------------------#
+#		Advance Options			#
+#-----------------------------------------------#
+$bInit=1;
+$iUpper=0;
+$iLower=0;
+$bTrim=0;
+$bXaxis=0;
+%hYArray=();
+%hLegendTokens=();
+@aPatterns=();
+
+%hGraphTypes = ('lines'=>1, 'bar'=>2);
+%hYAxisOptions = ('1'=>1, '2'=>2);
+
+#-----------------------------------------------#
+#		Colour Options			#
+#-----------------------------------------------#
+$BorderColour="cyan";
+$OptionColour="magenta";
+$TokenColour="yellow";
+
+
+#-----------------------------------------------#
+#		Start of Script			#
+#-----------------------------------------------#
+
+PrintHeader();
+chomp($iChoice = <>);
+#$iChoice = 1;
+
+if ($iChoice == 1)
+{
+	$bGraph=1;
+	Start();
+	color("reset");
+}
+elsif ($iChoice == 2)
+{
+	$bScript = 1;
+	CreateScriptHeader();
+	Start();
+	color("reset");
+}
+elsif ($iChoice == 3)
+{
+	$bCSV=1;
+	OpenCSV();
+	Start();
+}
+else
+{
+	PrintError("Invalid Choice!");
+}
+
+sub Start
+{
+	Print("\tEnter the exact Log Name to analyze:\n\t");
+	chomp($zLogName = <>);
+	$bSuccess = OpenFile($zLogName);
+	#$bSuccess = OpenFile("SSM_STAT.log");
+	if(!$bSuccess)
+	{
+		Start();
+	}
+
+	PromptForUserInputs();
+}
+
+#-----------------------------------------------#
+# Print the Token and the Value when a user	#
+# inputs a pattern to search			#
+#-----------------------------------------------#
+sub PrintTokens
+{
+	$zPattern = shift;
+	$filehandle = shift;
+
+	while (my $line = <$filehandle>)
+	{
+		if($line =~ /\Q$zPattern\E/)
+		{
+			chomp($line);
+			@aTok=split(/[%,; =\[\]\|]+/, $line);
+
+			$i=0;
+
+			while (defined $aTok[$i])
+			{
+				print color("cyan"), "\tToken", color("red"), " $i ", color("reset"), color("green"), ":[$aTok[$i]]\n", color("reset");
+				$i = $i + 1;
+			}
+
+			$iNoOfTokens=$i;
+			return 1;
+
+			last;
+		}
+	}
+
+	PrintError("Pattern Not Found!\n");
+
+	#Set the seek to the begining of the filehandle
+	#to enable enother seek
+	seek($filehandle,0,0);
+
+	return 0;
+}
+
+
+#-----------------------------------------------#
+# Search through the log for a given pattern 	#
+#-----------------------------------------------#
+sub SearchLogForPattern
+{
+	$zPattern = shift;
+	$filehandle = shift;
+
+	$zGraphTitle=$zPattern;
+
+	$iNoOfPatterns=$#aPatterns;
+	
+	if($bScript)
+	{
+		CreateScriptBody();
+	}
+
+	$iFound=0;
+
+	print "\n\tGenerating Please wait....\n";
+
+	while (my $line = <$filehandle>)
+	{
+		$iTmp=1;
+
+		if($bFilterByTime)
+		{
+			$bTimeOK=0;
+
+			@aTok=split(/[%,; =\[\]\|]+/, $line);
+			$zT=$aTok[$iX];
+			@aTmp=split(/:/,$zT);
+			$iT=join("", @aTmp);
+			$iT=$iT+0;
+			
+			if (($iT>$iTB) && ($iT<$iTE))
+			{
+				$bTimeOK=1;
+			}
+			elsif($iT>$iTE)# Do not read further, if the end time stamp is found
+			{
+				Print("Specified End Time Stamp Found [$iTE]...\n");
+				last;
+			}
+		}
+
+		if($bTimeOK)
+		{
+		while($iTmp<=$iNoOfPatterns)
+		{
+			if($line =~ /\Q$aPatterns[$iTmp]\E/)
+			{	
+				chomp($line);
+				@aTok=split(/[%,; =\[\]\|]+/, $line);
+				#print "$line\n";
+
+				# Use the first found value for X as the base for comparisons
+				#if($iTmp==1)
+				#{
+				if(($iSampleCount % $iNthSample) == 0)
+				{
+					if($bXaxis)
+					{
+						$x=$iX;
+						$iX=$iX+1;
+					}
+					else
+					{
+						#$x=$aTok[$zX];
+						$x=$aTok[$iX];
+					}
+
+					if($bCSV)
+					{
+						PrintCSVField("$x");
+					}
+				}
+				#}
+
+				$iFound=$iFound+1;
+
+				$iC=1;
+				while ($iC<=$iLegends)
+				{
+					if($iNoOfPatterns eq 1)
+					{
+						$y=$hLegendTokens{$iC};
+					}
+					else
+					{
+						$y=$hLegendTokens{$iTmp};
+					}
+
+					$value=$aTok[$y]+0;
+					if($bTrim)
+					{
+						if($value>$iUpper)
+						{
+							#Print("Trimmed $value to $iUpper\n");
+							$value=$iUpper;
+						}
+						elsif($value<$iLower)
+						{
+							#Print("Trimmed $value to $iLower\n");
+							$value=$iLower;
+						}
+					}
+
+					if(($iSampleCount % $iNthSample) == 0)
+					{
+						if($bCSV)
+						{
+							PrintCSVField(",$value");
+						}
+
+						if($iNoOfPatterns eq 1)
+						{
+							$hYArray[$iC]{$x}=$value;
+							#print "$x Legend $iC [$y] $hYArray[$iC]{$x}\n";
+						}
+						else
+						{
+							$hYArray[$iTmp]{$x}=$value;
+							if($bCSV)
+							{
+								PrintCSVField(",");
+							}
+							#print "$x Legend $iTmp [$y] $hYArray[$iTmp]{$x}\n";
+						}
+
+						#print "################### Sampled at [$iNoOfPatterns] [$iFound] [$iSampleCount]\n";
+					}
+
+					$iC=$iC+1;
+				}
+
+				if($iNoOfPatterns eq 1)
+				{
+					PrintCSVField("\n");
+
+					if($bNthSample)
+					{
+						$iSampleCount=$iSampleCount+1;
+					}
+				}
+			}
+
+			$iTmp=$iTmp+1;
+		}
+		}
+
+		if(($iNoOfPatterns>1) && ($iFound == $iNoOfPatterns))
+		{
+			PrintCSVField("\n");
+
+			if($bNthSample)
+			{
+				$iSampleCount=$iSampleCount+1;
+			}
+
+			#print "Sample Count: [$iNthSample] [$iSampleCount]\n";
+			$iFound=0;
+		}
+	}
+
+	$zGraphTitle=~ s/:/_/g;	
+	$zGraphTitle=~ s/\|/_/g;
+
+	if($bScript)
+	{
+		PrintScriptLine(0, "\nGenerateGraph(\"$zGraphType\",\"$zGraphTitle\",\"$zGraphXTitle\",\"$zGraphYTitle\",\"$zLegends\",\\\@hYArray);\n");
+		print color("cyan"), "\n\tScript Configurations\n";
+		print color("cyan"), "\t------ --------------\n";
+		print color("cyan"), "\tScript Name\t: \"script\"\n";
+		DisplaySummary();
+	}
+	elsif($bGraph)
+	{
+		GenerateGraph($zGraphType,$zGraphTitle,$zGraphXTitle,$zGraphYTitle,$zLegends,\@hYArray);
+		print color("cyan"), "\n\tGraph Configurations\n";
+		print color("cyan"), "\t------ -------------\n";
+		print color("cyan"), "\tGraph Name\t: \"$zGraphTitle.jpeg\"\n";
+		DisplaySummary();
+	}
+}
+
+sub DisplaySummary
+{
+	print color("cyan"), "\tTitle\t\t: \"$zGraphTitle\"\n";
+	print color("cyan"), "\tType\t\t: \"$zGraphType\"\n";
+	print color("cyan"), "\tX Axis Title\t: \"$zGraphXTitle\"\n";
+	print color("cyan"), "\tY Axis Title\t: \"$zGraphYTitle\"\n";
+	print color("cyan"), "\tLegends\t\t: \"$zLegends\"\n";
+	print color("reset");
+}
+
+#-----------------------------------------------#
+# Prompt the user for inputs		 	#
+#-----------------------------------------------#
+sub PromptForUserInputs
+{
+	PrintOptionHeader("\t\tY axis Options\t\t");
+	PrintOption(" (1) Stats by single pattern\t    ");
+	PrintOption(" (2) Compare stats by more patterns   ");
+	EndOption();
+
+	Print("\tSelect your Choice:\n\t");
+	chomp($opt = <>);
+	if($opt ne "")
+	{
+		while(!defined $hYAxisOptions{$opt})
+		{
+			PrintError("\tInvalid Option!\n");
+			Print("\tSelect your Choice:\n\t");
+			chomp($opt = <>);
+		}
+
+		print color("yellow", "blink"), "\tPress ENTER for Defaults\n\n",color("reset");
+
+		CallAdvanceOptions($opt);
+	}
+	else
+	{
+		while($opt eq "")
+		{
+			Print("\tSelect your Choice:\n\t");
+			chomp($opt = <>);
+		}
+	}
+
+	Print("\t\"Token\" for X axis \t\t[Default: 1..n]:\n\t");
+	chomp($opt = <>);
+
+	while( (!(IsNumeric($opt))) || (!(IsValidNumber($opt))))
+	{
+		Print("\t\"Token\" for X axis \t\t[Default: 1..n]:\n\t");
+		chomp($opt = <>);
+	}
+
+	if($opt ne "")
+	{
+		$iX=$opt+0;
+		Print("\tSpecify Time Period \t\t[Default - Begin:00:00:00 End:23:59:59]:");
+
+		$bOk=GetTime();
+		while(!$bOk)
+		{
+			$bOk=GetTime();
+		}
+	}
+	else
+	{
+		$bXaxis=1;
+	}
+
+	Print("\tSampled Frequency (Every \"N\" th Sample) \t[Default: All Samples]:\n\t");
+	chomp($opt = <>);
+	while( ! (IsNumeric($opt)))
+	{
+		Print("\tSampling Frequency (Every \"N\" th Sample) \t[Default: All Samples]:\n\t");
+		chomp($opt = <>);
+	}
+
+	if($opt ne "")
+	{
+		$iNthSample=$opt+0;
+		$bNthSample=1;
+	}
+
+	Print("\t\"X axis Title\" \t\t[Default: \"$zGraphXTitle\"]:\n\t");
+	chomp($opt = <>);
+	if($opt ne "")
+	{
+		$zGraphXTitle=$opt;
+	}
+
+	Print("\t\"Y axis Title\" \t\t[Default: \"$zGraphYTitle\"]:\n\t");
+	chomp($opt = <>);
+	if($opt ne "")
+	{
+		$zGraphYTitle=$opt;
+	}
+
+	Print("\tEnter \"Title\" for the graph \t\t[Default: \"$zGraphTitle\"]:\n\t");
+	chomp($zTitle = <>);
+	if($zTitle ne "")
+	{
+		$zGraphTitle=$zTitle;
+	}
+
+	Print("\tEnter \"Type\" \t\t[lines-Default|bar]:\n\t");
+	chomp($zType = <>);
+	if($zType ne "")
+	{
+		while(!defined $hGraphTypes{$zType})
+		{
+			Print("\tEnter \"Type\" \t\t[lines-Default|bar]:\n\t");
+			chomp($zType = <>);
+		}
+
+		$zGraphType=$zType;
+	}
+
+	color("reset");
+
+	SearchLogForPattern($zGraphTitle, "LOG");
+	#SearchLogForPattern("Graph FIX BPE", "LOG");
+}
+
+#-----------------------------------------------#
+# Prompt user for advance options for Y axis	#
+#-----------------------------------------------#
+sub CallAdvanceOptions
+{
+	$opt=shift;
+	Print("\tEnter \"Legends\" for Y axis [e.g Legend1,Legend2]:\n\t");
+	chomp($zLeg = <>);
+	while ($zLeg eq "")
+	{
+		Print("\tEnter \"Legends\" for Y axis [e.g Legend1,Legend2]:\n\t");
+		chomp($zLeg = <>);
+	}
+
+	if($zLeg ne "")
+	{
+		$zLegends = $zLeg;
+		@aTmp=split(/[,]+/, $zLeg);
+		$iLegends=scalar(@aTmp);
+		$iLSize=scalar(@aTmp);
+
+		if($bCSV)
+		{
+			PrintCSVField("$zLegends\n");
+		}
+		
+		if ($opt eq "1")
+		{
+			Print("\tEnter \"Log Pattern\" for Legend:$zLegends\n\t");
+			chomp($zPat = <>);
+
+			$bFound=PrintTokens($zPat,"LOG");
+			while(!$bFound)
+			{
+				Print("\tEnter \"Log Pattern\" for Legend:$zLegends\n\t");
+				chomp($zPat = <>);
+				$bFound=PrintTokens($zPat,"LOG");
+			}
+
+			@aPatterns[1]=$zPat;
+
+			Print("\tEnter \"Token\" for Legend :\n");		
+
+			$i=1;
+			while($i<=$iLegends)
+			{
+				print color("yellow"), "\t[$aTmp[$i-1]]:",color("reset");
+				chomp($iToken = <>);
+				while(( !(IsNumeric($iToken)) ) || ( !(IsValidNumber($iToken)) ))
+				{
+					print color("yellow"), "\t[$aTmp[$i-1]]:",color("reset");
+					chomp($iToken = <>);
+				}
+
+				$hLegendTokens{$i}=$iToken;
+				$i=$i+1;
+			}
+
+			if($bScript)
+			{
+				print SCRIPT "";
+			}
+		}
+		elsif ($opt eq "2")
+		{
+			$j=1;
+			while($j<=$iLSize)
+			{
+				Print("\tEnter \"Pattern\" for Legend [$aTmp[$j-1]]:\n\t");
+				chomp($zPat = <>);
+
+				$bFound=PrintTokens($zPat,"LOG");
+				while(!$bFound)
+				{
+					Print("\tEnter \"Pattern\" for Legend [$aTmp[$j-1]]:\n\t");
+					chomp($zPat = <>);
+					$bFound=PrintTokens($zPat,"LOG");
+				}
+
+				@aPatterns[$j]=$zPat;
+
+				Print("\tEnter \"Token\" for Legend [$aTmp[$j-1]]:\n");
+				print color("yellow"), "\t[$aTmp[$j-1]]:",color("reset");
+				chomp($iToken = <>);
+
+				while(( !(IsNumeric($iToken)) ) || ( !(IsValidNumber($iToken)) ))
+				{
+					print color("yellow"), "\t[$aTmp[$j-1]]:",color("reset");
+					chomp($iToken = <>);
+				}				
+
+				$hLegendTokens{$j}=$iToken;
+				$j=$j+1;
+				$iLegends=1 #One stat in one line
+			}
+		}
+	
+		if($bScript)
+		{	
+			$i=1;
+			while(defined $hLegendTokens{$i})
+			{
+				#print SCRIPT "Pattern: $aPatterns[$i]\n";	
+				#print SCRIPT "Token: $hLegendTokens{$i}\n";
+				$i=$i+1;
+			}
+		}
+	}
+
+	Print("\t\"Y axis Range?(e.g 100-200)\" \t[Default: Don't Trim]:\n\t");
+	chomp($opt = <>);
+	#while((!(IsNumeric($opt))) && ($opt ne ""))
+	while( !(IsValidRange($opt)) )
+	{
+		Print("\t\"Y axis Range?(e.g 100-200)\" \t[Default: Don't Trim]:\n\t");
+		chomp($opt = <>);
+	}
+	
+	#if($opt ne "")
+	#{
+	#	$iUpper=$opt+0;
+	#	$bTrim=1;
+	#}
+}
+
+sub GenerateGraph
+{
+	my ($Array) = @_;
+	graph($zGraphType,$zGraphTitle,$zGraphXTitle,$zGraphYTitle,"Legend 1",\%Array);
+
+	print "$type, $x, $y\n";
+}
+
+#-----------------------------------------------#
+# Time related processing			#
+#-----------------------------------------------#
+sub GetTime
+{
+	Print("\n\tBegin:\t");
+	chomp($begin = <>);
+	while( ! (ValidateTimeFormat($begin)))
+	{
+		Print("\n\tBegin:\t");
+		chomp($begin = <>);
+	}
+
+	Print("\tEnd:\t");
+	chomp($end = <>);
+	while( ! (ValidateTimeFormat($end)))
+	{
+		Print("\n\tEnd:\t");
+		chomp($end = <>);
+	}
+
+	if(($begin ne "") && ($end ne ""))
+	{
+		$bOk=CompareTimes($begin,$end);
+		if($bOk)
+		{
+			$bFilterByTime=1;
+		}
+
+		return $bOk;
+	}
+
+	return 1;
+}
+
+sub ValidateTimeFormat
+{
+	$zTime=shift;
+
+	$zFormat='[0-2][0-9]:[0-5][0-9]:[0-5][0-9]';
+	
+	if($zTime ne "")
+	{	
+		if($zTime =~ /$zFormat/)
+		{
+			@aTmp = split(/:/,$zTime);
+			$hour=$aTmp[0]+0;
+			if($hour<=23)
+			{
+				return 1;
+			}
+			else
+			{
+				PrintError("Do you have more than 24 hours a day in your world?");
+				return 0;
+			}
+
+		}
+		else
+		{
+			PrintError("Invalid Time!");
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+sub CompareTimes
+{
+	$zBegin=shift;
+	$zEnd=shift;
+
+	@aTmp=split(/:/,$zBegin);
+	$iTB=join("", @aTmp);
+	$iTB=$iTB+0;
+	
+	@aTmp=split(/:/,$zEnd);
+	$iTE=join("", @aTmp);
+	$iTE=$iTE+0;
+	#print "Begin:[$iTB] END:[$iTE]\n";
+
+	if($iTB>=$iTE)
+	{
+		PrintError("End Time should be greater than Begin Time!");
+		return 0;
+	}
+	else
+	{
+		return 1;
+	}
+}
+
+#-----------------------------------------------#
+# Printing formats 				#
+#-----------------------------------------------#
+sub Print
+{
+	$zLine = shift;
+	print color("yellow"),"$zLine",color("reset");	
+}
+
+sub PrintError
+{
+	$zLine = shift;
+	print color("red"),"\tERROR: $zLine",color("reset");	
+}
+
+sub PrintHeader
+{
+	PrintOptionHeader("\t\tGraphTool\t\t");
+	PrintOption("(1) Generate Graph\t\t    ");
+	PrintOption("(2) Generate Perl Script\t\t    ");
+	PrintOption("(3) Generate .csv file\t\t    ");
+	PrintOption("(4) Exit\t\t\t\t    ");
+	EndOption();
+	Print("\tEnter your Choice:\n\t");
+}
+
+sub PrintOption
+{
+	$zOption=shift;
+	print color("cyan"), "\n|", color($OptionColour), " $zOption",color("cyan"), "|\n";
+	print color("cyan"), "|\t\t\t\t\t    |";
+	print color("reset");	
+}
+
+sub PrintOptionHeader
+{
+	$zTitle=shift;
+	print color("cyan"), "\n+---------------------------------------+";
+	print color("cyan"), "\n|$zTitle|";
+	print color("cyan"), "\n+---------------------------------------+";
+	print color("reset");	
+}
+
+sub EndOption
+{
+	print color("cyan"), "\n+---------------------------------------+\n";
+}
+
+sub Splitter
+{
+	print color("cyan"), "\n+---------------------------------------+";
+}
+
+#-----------------------------------------------#
+# Open a given file. Returns 1 if successful	#
+# else returns	0				#
+#-----------------------------------------------#
+sub OpenFile
+{
+	$zLog=shift;
+
+	if($bScript)
+	{
+		PrintScriptLine(0, "eval{open (LOG, \"$zLog\") or die \"PROBLEM : \$\!\\n\";};");
+		PrintScriptLine(0, "if\(\$\@ =~ /No such file or directory/\)");
+		PrintScriptLine(0, "{\n\tprint\"\$\! - $zLog\\n\";\n}");
+		PrintScriptLine(0, "");
+	}
+
+	eval{open (LOG, $zLog) or die "PROBLEM : $!\n";};
+	if($@ =~ /No such file or directory/)
+	{
+		PrintError("\t$! - $zLog\n");
+		return 0;
+	}
+	else
+	{
+		return 1;
+	}
+}
+
+#-----------------------------------------------#
+# Open a file for Comma Separated Values	#
+#-----------------------------------------------#
+sub OpenCSV
+{
+	open (CSV, '>CSV.csv');
+	
+}
+
+sub PrintCSVField
+{
+	$zValue=shift;
+	print CSV "$zValue";
+}
+
+#-----------------------------------------------#
+# Create the Perl script based on the parameters#
+#-----------------------------------------------#
+sub CreateScriptHeader
+{
+	open (SCRIPT, '>script');
+
+	PrintScriptLine(0, "#!/usr/bin/perl\n");
+	PrintScriptLine(0, "use GD::Graph::linespoints;\nuse GD::Graph::bars;\nuse GD::Graph::colour;\nuse Term::ANSIColor;\n");
+	PrintScriptLine(0, "require '$zScriptPath/GenGraph.pl';");
+	PrintScriptLine(0, "GD::Graph::colour::read_rgb\(\"$zScriptPath/rgb.txt\"\) or die \"Cannot read colours from rgb.txt\";\n");	
+	PrintScriptLine(0, "\@colour_names - GD::Graph::colour::colour_list\(\);\n");
+	PrintScriptLine(0, "");
+}
+
+sub CreateScriptBody
+{
+	$iNoOfPatterns=$#aPatterns;
+
+	$iShift=0;
+	$i=1;
+	$iTimePt = 0;
+
+	if($bFilterByTime)
+	{
+		PrintScriptLine(0, "\$iTB=\"$iTB\";");	
+		PrintScriptLine(0, "\$iTE=\"$iTE\";");	
+		PrintScriptLine(0, "");
+	}
+
+	if($bNthSample)
+	{
+		PrintScriptLine(0, "\$iSampleCount=0;");
+		PrintScriptLine(0, "\$iNthSample=$iNthSample;");
+		PrintScriptLine(0, "");
+	}
+
+	if($bXaxis)
+	{
+		PrintScriptLine(0, "\$iTimePt = 0;");
+		PrintScriptLine(0, "");
+	}
+
+	while($i<=$iNoOfPatterns)
+	{
+		PrintScriptLine(0, "\$zPattern$i = \"$aPatterns[$i]\";");
+		PrintScriptLine(0, "");
+		$i=$i+1;
+	}
+
+	PrintScriptLine(0, "");
+	PrintScriptLine(0, "while (my \$line = <LOG>)");
+	PrintScriptLine(0, "{");
+
+	if($bFilterByTime)
+	{
+		PrintScriptLine(1, "\$bTimeOK=0;");
+		PrintScriptLine(1, "");
+		PrintScriptLine(1, "\@aTok=split(/[%,; =\\[\\]\|]+/, \$line);");
+		PrintScriptLine(1, "\@aTmp=split(/:/,\$aTok[$iX]);");
+		PrintScriptLine(1, "\$iT = join(\"\", \@aTmp);");
+		PrintScriptLine(1, "");
+		PrintScriptLine(1, "if ((\$iT>\$iTB) && (\$iT<\$iTE))");
+		PrintScriptLine(1, "{");
+		PrintScriptLine(2, "\$bTimeOK=1;");
+		PrintScriptLine(1, "}");
+		PrintScriptLine(1, "");
+		PrintScriptLine(1, "if(\$bTimeOK)");
+		PrintScriptLine(1, "{");
+		$iShift=1;
+	}
+
+	$i=1;
+	while($i<=$iNoOfPatterns)
+	{
+		PrintScriptLine($iShift+1, "if(\$line =~ /\\Q\$zPattern$i\\E/)");
+		PrintScriptLine($iShift+1, "{");
+		PrintScriptLine($iShift+2, "chomp(\$line);");
+		PrintScriptLine($iShift+2, "\@aTok=split(/[%,; =\\[\\]\|]+/, \$line);");
+		PrintScriptLine(0, "");
+
+		if($bXaxis)
+		{
+			PrintScriptLine($iShift+2, "\$x = \$iTimePt;");
+			PrintScriptLine($iShift+2, "\$iTimePt= \$iTimePt+1;");
+			PrintScriptLine(0, "");
+		}
+		else
+		{
+			PrintScriptLine($iShift+2, "\$x = \$aTok[$iX];");
+			PrintScriptLine(0, "");
+		}
+
+		if($bNthSample)
+		{	
+			PrintScriptLine($iShift+2, "if((\$iSampleCount % \$iNthSample) == 0)");
+			PrintScriptLine($iShift+2, "{");
+		}
+
+		if($iNoOfPatterns == 1)
+		{
+			$j=1;
+			while($j<=$iLegends)
+			{
+				PrintScriptLine(0, "");
+				PrintScriptLine($iShift+3, "\$y$j=\$aTok[$hLegendTokens{$j}];");
+				
+				if($bTrim)
+				{
+					PrintScriptLine($iShift+3, "if(\$y$j>$iUpper)");
+					PrintScriptLine($iShift+3, "{");
+					PrintScriptLine($iShift+4, "\$y$j=$iUpper;");
+					PrintScriptLine($iShift+3, "}");
+					PrintScriptLine($iShift+3, "elsif(\$y$j<$iLower)");
+					PrintScriptLine($iShift+3, "{");
+					PrintScriptLine($iShift+4, "\$y$j=$iLower;");
+					PrintScriptLine($iShift+3, "}");
+				}
+			
+				PrintScriptLine($iShift+3, "\$hYArray[$j]{\$x}=\$y$j;");
+
+				$j=$j+1;
+			}
+		}
+		else
+		{
+			PrintScriptLine($iShift+3, "\$y$i=\$aTok[$hLegendTokens{$i}];");
+
+			if($bTrim)
+			{
+				PrintScriptLine($iShift+3, "if(\$y$i>$iUpper)");
+				PrintScriptLine($iShift+3, "{");
+				PrintScriptLine($iShift+4, "\$y$i=$iUpper;");
+				PrintScriptLine($iShift+3, "}");
+			}
+
+			PrintScriptLine($iShift+3, "\$hYArray[$i]{\$x}=\$y$i;");
+		}
+
+		if($bNthSample)
+		{
+			PrintScriptLine($iShift+2, "}");
+			PrintScriptLine(0, "");
+		}
+
+		if($bNthSample)
+		{
+			PrintScriptLine($iShift+2, "\$iSampleCount=\$iSampleCount+1");
+		}
+
+		PrintScriptLine($iShift+1, "}");
+		$i=$i+1;
+	}
+
+	if($bFilterByTime)
+	{
+		PrintScriptLine(1, "}");
+		PrintScriptLine(1, "");
+		PrintScriptLine(1, "if(\$iT>\$iTE)");
+		PrintScriptLine(1, "{");
+		PrintScriptLine(2, "print \"Specified End Time Stamp Found [\$iTE]...\\n\";");
+		PrintScriptLine(2, "close LOG;");
+		PrintScriptLine(2, "last;");
+		PrintScriptLine(1, "}");
+	}
+
+	PrintScriptLine(0, "}");
+}
+
+sub PrintScriptLine
+{
+	$iTabs = shift;
+	$zLine = shift;
+	
+	if($iTabs == 0 )
+	{
+		print SCRIPT "$zLine\n";
+	}
+	elsif($iTabs == 1)
+	{
+		print SCRIPT "\t$zLine\n";
+	}
+	elsif($iTabs == 2)
+	{
+		print SCRIPT "\t\t$zLine\n";
+	}
+	elsif($iTabs == 3)
+	{
+		print SCRIPT "\t\t\t$zLine\n";
+	}
+	elsif($iTabs == 4)
+	{
+		print SCRIPT "\t\t\t\t$zLine\n";
+	}
+	elsif($iTabs == 5)
+	{
+		print SCRIPT "\t\t\t\t\t$zLine\n";
+	}
+	elsif($iTabs == 6)
+	{
+		print SCRIPT "\t\t\t\t\t\t$zLine\n";
+	}
+}
+
+#-----------------------------------------------#
+# Validations					#
+#-----------------------------------------------#
+sub IsNumeric
+{
+	$val=shift;
+	$num=$val+0;
+
+	if($val ne "")
+	{
+		if($num eq $val)
+		{
+			return 1;
+		}
+		else
+		{
+			PrintError("Entered value is not Numerical!\n");
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+sub IsValidNumber
+{
+	$iPos=shift;
+
+	if($iPos ne "")
+	{	
+		if($iPos<$iNoOfTokens)
+		{
+			return 1;
+		}
+		else
+		{
+			PrintError("Entered value is out of Range!\n");
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+sub IsValidRange
+{
+	$zRange=shift;
+	$zRangeFormat='^*\-*';
+
+	if($zRange ne "")
+	{
+		if($zRange =~ /$zRangeFormat/)
+		{
+			@aTmp=split(/\-/,$zRange);
+			if( (IsNumeric($aTmp[0])) && (IsNumeric($aTmp[1])))
+			{
+				$iLower=$aTmp[0]+0;
+				$iUpper=$aTmp[1]+0;
+				$bTrim=1;
+				return 1;
+			}
+			else
+			{
+				return 0;
+			}
+		}
+		elsif((IsNumeric($zRange)))
+		{
+			$iCeling=$zRange+0;
+			return 1;
+		}
+	}
+
+	return 1;
+}
+
+close SCRIPT;
+close CSV;
+
